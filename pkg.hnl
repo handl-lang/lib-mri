@@ -1,0 +1,8 @@
+{
+  modules: ["mri"],
+  name: "mri",
+  description: "mri — a minimal argv parser implementing the npm mri semantics in pure handl.",
+  license: "MIT",
+  keywords: ["argv", "cli", "parser", "stdlib", "handl"],
+  homepage: "https://github.com/handl-lang/lib-mri",
+}

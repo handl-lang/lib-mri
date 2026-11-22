@@ -1,0 +1,631 @@
+--- mri -- a minimal argv parser implementing the `mri` (npm) semantics
+--- in pure handl.
+---
+--- Port of https://github.com/lukeed/mri `src/index.js`, clause-for-clause
+--- over the common surface:
+---
+---   parse(args, opts) ~> { "_": [positionals...], <flag>: <value>, ... }
+---
+--- Supported argument forms (matching mri exactly):
+---   --flag           boolean flag, value `true`
+---   --key=value      `=`-separated value
+---   --key value      space-separated value (next arg, unless it starts
+---                    with `-`, in which case the flag is `true`)
+---   -abc              grouped short flags: `a`, `b` get `true`, `c` gets
+---                    the (possibly consumed) value
+---   -k value          single short flag with a value
+---   -abc=val          `a`/`b` get `true`, `c` gets `"val"`
+---   --no-x            negation: `x` is set to `false` (overwrites)
+---   --                end-of-flags: everything after is positional
+---   -                  a lone `-` is consumed and produces nothing
+---
+--- Value coercion (mri's `toVal`):
+---   - `opts.string` names keep values as strings (`true`/`null` -> `""`)
+---   - `opts.boolean` names: `"false"` -> `false`, `"true"` -> `true`,
+---     anything else pushes the (numeric-coerced) raw value onto the
+---     positional list `"_"` and stores JS-truthiness of the raw value
+---   - everything else: JS `+val` numeric coercion -- numeric-looking
+---     strings become numbers, everything else stays a string
+---   - repeated flags accumulate into arrays (`[old, nxt]` / concat)
+---
+--- `opts` fields: `string`, `boolean` (name or list of names),
+--- `alias` (record of name -> name-or-list, expanded bidirectionally),
+--- `default` (record of fallback values; string/boolean-typed defaults
+--- promote their key -- and aliases -- into the string/boolean lists,
+--- exactly like mri's `typeof opts.default[k]` dispatch), and `unknown`
+--- (a function; its presence enables strict mode -- unknown flags call
+--- it with the offending spelling and its result is returned verbatim,
+--- bypassing defaults and alias expansion, as in mri's `return
+--- opts.unknown(arg)`).
+---
+--- Known divergences from mri (all in unreachable-in-practice corners):
+---   - lone-surrogate / astral-plane flag names iterate UTF-16 code
+---     units in JS but Unicode scalars here.
+---   - `opts.unknown: null` is treated as absent (mri treats it as
+---     strict and crashes on the call).
+---   - non-string argv elements are kept as positionals (mri throws on
+---     `null`/`undefined` elements via `arg.length`).
+---   - handl records iterate keys sorted, not in insertion order, so
+---     `opts.alias` / `opts.default` entries are preprocessed in sorted
+---     key order.  mri's alias fixpoint reads `opts.alias[k]` live, so
+---     *interacting* multi-key alias maps can resolve differently;
+---     single-key and non-interacting maps are identical (the internal
+---     `out` table is an insertion-ordered assoc list, so output-side
+---     ordering matches mri exactly).
+
+from "str" import * as str
+from "obj" import * as obj
+from "typeof" import * as typeof
+
+-- ---------------------------------------------------------------------
+-- list / record helpers
+-- ---------------------------------------------------------------------
+
+alen :: (xs) ~> while { xs: xs, n: 0 } {
+  (xs, n) ~> match xs {
+    []: { out: n },
+    [_h, ...t]: { state: { xs: t, n: n + 1 } }
+  }
+}
+
+rev :: (xs) ~> while { xs: xs, acc: [] } {
+  (xs, acc) ~> match xs {
+    []: { out: acc },
+    [h, ...t]: { state: { xs: t, acc: [h, ...acc] } }
+  }
+}
+
+cat :: (xs, ys) ~> [...xs, ...ys]
+
+mem :: (xs, x) ~> while { xs: xs, found: false } {
+  (xs, found) ~> match xs {
+    []: { out: found },
+    [h, ...t]: { state: { xs: t, found: if h == x { true } else { found } } }
+  }
+}
+
+at :: (xs, i) ~> while { xs: xs, i: i } {
+  (xs, i) ~> match xs {
+    []: { out: null },
+    [h, ...t]: if i <= 0 { { out: h } } else { { state: { xs: t, i: i - 1 } } }
+  }
+}
+
+take :: (xs, n) ~> while { xs: xs, n: n, acc: [] } {
+  (xs, n, acc) ~> match xs {
+    []: { out: rev(acc) },
+    [h, ...t]: if n <= 0 { { out: rev(acc) } } else { { state: { xs: t, n: n - 1, acc: [h, ...acc] } } }
+  }
+}
+
+drop :: (xs, n) ~> while { xs: xs, n: n } {
+  (xs, n) ~> match xs {
+    []: { out: [] },
+    [h, ...t]: if n <= 0 { { out: xs } } else { { state: { xs: t, n: n - 1 } } }
+  }
+}
+
+-- assoc-list (JS-object-shaped) helpers: entries are `[key, value]`
+-- pairs in insertion order, like `obj.entries` produces.
+
+ahask :: (tbl, k) ~> while { xs: tbl, found: false } {
+  (xs, found) ~> match xs {
+    []: { out: found },
+    [e, ...t]: { state: { xs: t, found: if e[0] == k { true } else { found } } }
+  }
+}
+
+aget :: (tbl, k) ~> while { xs: tbl, out: null } {
+  (xs, out) ~> match xs {
+    []: { out: out },
+    [e, ...t]: if e[0] == k { { out: e[1] } } else { { state: { xs: t, out: out } } }
+  }
+}
+
+areplace :: (tbl, k, v) ~> while { xs: tbl, acc: [] } {
+  (xs, acc) ~> match xs {
+    []: { out: acc },
+    [e, ...t]: if e[0] == k { { state: { xs: t, acc: [...acc, [k, v]] } } } else { { state: { xs: t, acc: [...acc, e] } } }
+  }
+}
+
+aset :: (tbl, k, v) ~> if ahask(tbl, k) { areplace(tbl, k, v) } else { [...tbl, [k, v]] }
+
+tbl_keys :: (tbl) ~> while { xs: tbl, acc: [] } {
+  (xs, acc) ~> match xs {
+    []: { out: acc },
+    [e, ...t]: { state: { xs: t, acc: [...acc, e[0]] } }
+  }
+}
+
+-- record helpers (dynamic-key access goes through `obj.*` because a
+-- missing-key index raises)
+
+rget :: (r, k) ~> if typeof.is(r, typeof.obj()) {
+  if mem(obj.keys(r), k) { r[k] } else { null }
+} else { null }
+
+rentries :: (r) ~> if typeof.is(r, typeof.obj()) { obj.entries(r) } else { [] }
+
+-- mri's `toArr`: null -> [], array -> itself, anything else -> [x]
+to_arr :: (v) ~> if v == null {
+  []
+} else {
+  if typeof.is(v, typeof.arr()) { v } else { [v] }
+}
+
+chars_of :: (s) ~> while { i: 0, n: str.length(s), acc: [] } {
+  (i, n, acc) ~> if i >= n { { out: acc } } else {
+    { state: { i: i + 1, n: n, acc: [...acc, str.char_at(s, i)] } }
+  }
+}
+
+dash_count :: (s) ~> while { i: 0, n: str.length(s) } {
+  (i, n) ~> if i >= n { { out: i } } else {
+    if str.char_at(s, i) == "-" { { state: { i: i + 1, n: n } } } else { { out: i } }
+  }
+}
+
+-- ---------------------------------------------------------------------
+-- JS `+val` numeric coercion
+-- ---------------------------------------------------------------------
+
+is_dig :: (s, i) ~> str.find("0123456789", str.char_at(s, i)) >= 0
+
+scan_dig :: (s, i) ~> while { i: i, n: str.length(s) } {
+  (i, n) ~> if i >= n { { out: i } } else {
+    if is_dig(s, i) { { state: { i: i + 1, n: n } } } else { { out: i } }
+  }
+}
+
+-- fold `ds` (a nonempty digit string) in base `base` over alphabet `alpha`
+fold_base :: (ds, base, alpha) ~> do {
+  l := str.length(ds)
+  if str.is_empty(ds) {
+    { ok: false, v: 0 }
+  } else {
+    while { i: 0, acc: 0 } {
+      (i, acc) ~> if i >= l { { out: { ok: true, v: acc } } } else {
+        do {
+          d := str.find(alpha, str.lower(str.char_at(ds, i)))
+          if d < 0 {
+            { out: { ok: false, v: 0 } }
+          } else {
+            { state: { i: i + 1, acc: acc * base + d } }
+          }
+        }
+      }
+    }
+  }
+}
+
+-- scan an exponent `e[+-]?digits+` starting at index `i` (which points
+-- at the `e`/`E`); returns {ok, v: source slice, end}
+exp_scan :: (s, i) ~> do {
+  l := str.length(s)
+  k := i + 1
+  has_sign := k < l && (str.char_at(s, k) == "+" || str.char_at(s, k) == "-")
+  d0 := if has_sign { k + 1 } else { k }
+  d1 := scan_dig(s, d0)
+  if d1 == d0 {
+    { ok: false, v: "", end: 0 }
+  } else {
+    { ok: true, v: str.slice(s, i, d1), end: d1 }
+  }
+}
+
+has_nonzero :: (s) ~> while { i: 0, n: str.length(s) } {
+  (i, n) ~> if i >= n { { out: false } } else {
+    if str.find("123456789", str.char_at(s, i)) >= 0 {
+      { out: true }
+    } else {
+      { state: { i: i + 1, n: n } }
+    }
+  }
+}
+
+-- JS `+s` overflows to Infinity past ~1.8e308, and mri's `x*0===0`
+-- test then keeps the *string* (`Infinity*0` is NaN). `typeof.to_number`
+-- maps non-finite parses to 0, so a zero result on a nonzero mantissa
+-- with a non-negative exponent means overflow -> decline and let
+-- `js_num` return the original string. Underflow (`e-…`) stays 0, as
+-- does every exactly-zero mantissa.
+dec_build :: (s, i0, frac, expstr) ~> do {
+  ip := if i0 == 0 { "0" } else { str.slice(s, 0, i0) }
+  fp := if str.is_empty(frac) { "" } else { "." + frac }
+  mant := ip + fp
+  ns := mant + expstr
+  v := typeof.to_number(ns)
+  if v == 0 && has_nonzero(mant) && (expstr == "" || str.contains(expstr, "-") == false) {
+    { ok: false, v: 0 }
+  } else {
+    { ok: true, v: v }
+  }
+}
+
+-- decimal: `digits[.digits][eE[+-]digits]` or `.digits[...]`
+dec_val :: (s) ~> do {
+  l := str.length(s)
+  i0 := scan_dig(s, 0)
+  i1 := i0
+  frac := ""
+  if i0 < l && str.char_at(s, i0) == "." {
+    j0 := scan_dig(s, i0 + 1)
+    frac := str.slice(s, i0 + 1, j0)
+    i1 := j0
+  }
+  if i0 == 0 && str.is_empty(frac) {
+    { ok: false, v: 0 }
+  } else {
+    if i1 < l && (str.char_at(s, i1) == "e" || str.char_at(s, i1) == "E") {
+      er := exp_scan(s, i1)
+      if er.ok == false || er.end != l {
+        { ok: false, v: 0 }
+      } else {
+        dec_build(s, i0, frac, er.v)
+      }
+    } else {
+      if i1 != l {
+        { ok: false, v: 0 }
+      } else {
+        dec_build(s, i0, frac, "")
+      }
+    }
+  }
+}
+
+base_val :: (s) ~> if str.is_empty(s) {
+  { ok: false, v: 0 }
+} else {
+  if str.starts_with(s, "0x") || str.starts_with(s, "0X") {
+    fold_base(str.slice(s, 2, str.length(s)), 16, "0123456789abcdef")
+  } else {
+    if str.starts_with(s, "0b") || str.starts_with(s, "0B") {
+      fold_base(str.slice(s, 2, str.length(s)), 2, "01")
+    } else {
+      if str.starts_with(s, "0o") || str.starts_with(s, "0O") {
+        fold_base(str.slice(s, 2, str.length(s)), 8, "01234567")
+      } else {
+        dec_val(s)
+      }
+    }
+  }
+}
+
+num_scan :: (t) ~> do {
+  r0 := if str.starts_with(t, "-") {
+    { neg: true, body: str.slice(t, 1, str.length(t)) }
+  } else {
+    if str.starts_with(t, "+") {
+      { neg: false, body: str.slice(t, 1, str.length(t)) }
+    } else {
+      { neg: false, body: t }
+    }
+  }
+  r := base_val(r0.body)
+  if r.ok == false {
+    { ok: false, v: 0 }
+  } else {
+    { ok: true, v: if r0.neg { 0 - r.v } else { r.v } }
+  }
+}
+
+-- JS `+s`: whitespace-only/empty -> 0, numeric grammar -> number,
+-- anything else -> the original string
+js_num :: (s) ~> do {
+  t := str.trim(s)
+  if str.is_empty(t) {
+    0
+  } else {
+    r := num_scan(t)
+    if r.ok { r.v } else { s }
+  }
+}
+
+coerce :: (v) ~> if typeof.is(v, typeof.num()) {
+  v
+} else {
+  if typeof.is(v, typeof.str()) {
+    js_num(v)
+  } else {
+    if v == null { 0 } else { v }
+  }
+}
+
+-- JS `!!v` truthiness (differs from `typeof.to_bool` on []/{})
+js_truthy :: (v) ~> if v == null {
+  false
+} else {
+  if typeof.is(v, typeof.bool()) { v } else {
+    if typeof.is(v, typeof.num()) { v != 0 } else {
+      if typeof.is(v, typeof.str()) { v != "" } else { true }
+    }
+  }
+}
+
+-- `out` is an assoc list `[key, value]` in *insertion* order throughout
+-- the parse: JS `for k in out` iterates insertion order and the alias
+-- expansion's overwrite order is observable, while handl records iterate
+-- keys sorted.  Converted back to a record only in `finalize`.
+
+push_pos :: (out, v) ~> aset(out, "_", cat(aget(out, "_"), [v]))
+
+tbl_to_rec :: (tbl) ~> while { xs: tbl, acc: {} } {
+  (xs, acc) ~> match xs {
+    []: { out: acc },
+    [e, ...t]: { state: { xs: t, acc: obj.set(acc, e[0], e[1]) } }
+  }
+}
+
+-- mri's `toVal` value computation; may push onto `out._` for boolean
+-- options, so it returns {out, v}.
+val_for :: (out, key, val, ctx) ~> if mem(ctx.strs, key) {
+  { out: out, v: if (val == null || val == true) { "" } else { typeof.to_string(val) } }
+} else {
+  if typeof.is(val, typeof.bool()) {
+    { out: out, v: val }
+  } else {
+    if mem(ctx.bools, key) {
+      if val == "false" {
+        { out: out, v: false }
+      } else {
+        if val == "true" {
+          { out: out, v: true }
+        } else {
+          { out: push_pos(out, coerce(val)), v: js_truthy(val) }
+        }
+      }
+    } else {
+      { out: out, v: coerce(val) }
+    }
+  }
+}
+
+-- mri's `toVal` merge: `old == null ? nxt : Array.isArray(old) ?
+-- old.concat(nxt) : [old, nxt]`
+to_val :: (out, key, val, ctx) ~> do {
+  old := aget(out, key)
+  r := val_for(out, key, val, ctx)
+  merged := if old == null {
+    r.v
+  } else {
+    if typeof.is(old, typeof.arr()) {
+      cat(old, [r.v])
+    } else {
+      [old, r.v]
+    }
+  }
+  aset(r.out, key, merged)
+}
+
+-- ---------------------------------------------------------------------
+-- opts preprocessing (alias expansion, string/boolean promotion,
+-- strict-mode keys)
+-- ---------------------------------------------------------------------
+
+-- mri's alias fixpoint: `for k in opts.alias` visits the *original*
+-- keys in order, but reads `opts.alias[k]` live -- earlier inner writes
+-- (`opts.alias[tgt] = ...`) can overwrite a not-yet-visited entry's
+-- source list.  Targets are stored under their JS-stringified key.
+alias_expand :: (alias_in) ~> while { xs: alias_in, acc: [] } {
+  (xs, acc) ~> match xs {
+    []: { out: acc },
+    [e, ...t]: do {
+      k := e[0]
+      cur := aget(acc, k)
+      src := if cur == null { e[1] } else { cur }
+      al := to_arr(src)
+      acc1 := aset(acc, k, al)
+      acc2 := while { i: 0, n: alen(al), acc: acc1 } {
+        (i, n, acc) ~> if i >= n { { out: acc } } else {
+          do {
+            tgt := typeof.to_string(at(al, i))
+            rest := cat(take(al, i), cat(drop(al, i + 1), [k]))
+            { state: { i: i + 1, n: n, acc: aset(acc, tgt, rest) } }
+          }
+        }
+      }
+      { state: { xs: t, acc: acc2 } }
+    }
+  }
+}
+
+-- one level of alias lookup per original name (mri pushes
+-- `opts.alias[name]` entries onto the string/boolean lists)
+expand_names :: (names, tbl) ~> cat(names, while { xs: names, acc: [] } {
+  (xs, acc) ~> match xs {
+    []: { out: acc },
+    [nm, ...t]: do {
+      ex := aget(tbl, nm)
+      { state: { xs: t, acc: cat(acc, if ex == null { [] } else { ex }) } }
+    }
+  }
+})
+
+prep_opts :: (o) ~> do {
+  alias0 := alias_expand(rentries(rget(o, "alias")))
+  str1 := expand_names(to_arr(rget(o, "string")), alias0)
+  bool1 := expand_names(to_arr(rget(o, "boolean")), alias0)
+  def_in := rentries(rget(o, "default"))
+  dp := while { xs: def_in, alias: alias0, strs: str1, bools: bool1 } {
+    (xs, alias, strs, bools) ~> match xs {
+      []: { out: { alias: alias, strs: strs, bools: bools } },
+      [e, ...t]: do {
+        k := e[0]
+        dv := e[1]
+        arr0 := aget(alias, k)
+        al := if arr0 == null { [] } else { arr0 }
+        alias2 := aset(alias, k, al)
+        strs2 := if typeof.is(dv, typeof.str()) { cat(cat(strs, [k]), al) } else { strs }
+        bools2 := if typeof.is(dv, typeof.bool()) { cat(cat(bools, [k]), al) } else { bools }
+        { state: { xs: t, alias: alias2, strs: strs2, bools: bools2 } }
+      }
+    }
+  }
+  unk := rget(o, "unknown")
+  {
+    alias: dp.alias,
+    strs: dp.strs,
+    bools: dp.bools,
+    defs: def_in,
+    strict: unk != null,
+    unk: unk,
+    keys: if unk != null { tbl_keys(dp.alias) } else { [] }
+  }
+}
+
+-- ---------------------------------------------------------------------
+-- parse steps
+-- ---------------------------------------------------------------------
+
+-- mri's tail: apply defaults for absent keys (`out[k] === void 0`),
+-- then `for k in out { while (arr.length) out[arr.shift()] = out[k] }`
+-- -- insertion-order iteration over a *snapshot* of the keys (handl
+-- assoc lists give us exactly that; keys added during expansion are
+-- appended to `acc` and never revisited, matching V8's enum cache).
+-- `out[k]` is re-read live for every target write.
+finalize :: (outl, ctx) ~> do {
+  o1 := while { xs: ctx.defs, acc: outl } {
+    (xs, acc) ~> match xs {
+      []: { out: acc },
+      [e, ...t]: if ahask(acc, e[0]) {
+        { state: { xs: t, acc: acc } }
+      } else {
+        { state: { xs: t, acc: aset(acc, e[0], e[1]) } }
+      }
+    }
+  }
+  while { xs: o1, acc: o1 } {
+    (xs, acc) ~> match xs {
+      []: { out: tbl_to_rec(acc) },
+      [e, ...t]: do {
+        al0 := aget(ctx.alias, e[0])
+        al := if al0 == null { [] } else { al0 }
+        acc2 := while { ys: al, a: acc } {
+          (ys, a) ~> match ys {
+            []: { out: a },
+            [tg, ...tt]: { state: { ys: tt, a: aset(a, typeof.to_string(tg), aget(a, e[0])) } }
+          }
+        }
+        { state: { xs: t, acc: acc2 } }
+      }
+    }
+  }
+}
+
+-- mri's negation branch: `out[name] = false` (plain assignment, no
+-- coercion, no merge; aliases are applied by `finalize`)
+negstep :: (arg, j, t, i, n, out, ctx) ~> do {
+  nm := str.slice(arg, j + 3, str.length(arg))
+  if ctx.strict {
+    if mem(ctx.keys, nm) {
+      { state: { xs: t, i: i + 1, n: n, out: aset(out, nm, false) } }
+    } else {
+      { out: ctx.unk(arg) }
+    }
+  } else {
+    { state: { xs: t, i: i + 1, n: n, out: aset(out, nm, false) } }
+  }
+}
+
+-- mri's flag branch: `name`/`val` extraction, grouped-short expansion,
+-- per-name strict check, `toVal` per name.
+flagstep :: (arg, t, i, n, out, ctx, j) ~> do {
+  l := str.length(arg)
+  eq := while { p: j + 1, m: l } {
+    (p, m) ~> if p >= m { { out: (0 - 1) } } else {
+      if str.char_at(arg, p) == "=" { { out: p } } else { { state: { p: p + 1, m: m } } }
+    }
+  }
+  has_eq := eq != (0 - 1)
+  idx := if has_eq { eq } else { l }
+  nm := str.slice(arg, j, idx)
+  rest := if has_eq { str.slice(arg, idx + 1, l) } else { "" }
+  fv := if has_eq && rest != "" {
+    { val: rest, xs: t, i2: i + 1 }
+  } else {
+    if i + 1 == n {
+      { val: true, xs: t, i2: i + 1 }
+    } else {
+      nxt := at(t, 0)
+      ns := typeof.to_string(nxt)
+      if str.length(ns) > 0 && str.char_at(ns, 0) == "-" {
+        { val: true, xs: t, i2: i + 1 }
+      } else {
+        match t {
+          [_h, ...tt]: { val: nxt, xs: tt, i2: i + 2 },
+          []: { val: true, xs: t, i2: i + 1 }
+        }
+      }
+    }
+  }
+  al := if j == 2 { [nm] } else { chars_of(nm) }
+  na := alen(al)
+  -- strict pre-scan: mri returns `opts.unknown(spelling)` at the first
+  -- unknown name; earlier `toVal` writes are discarded with the return.
+  bad := while { p: 0, z: 0 } {
+    (p, z) ~> if p >= na { { out: null } } else {
+      do {
+        key := at(al, p)
+        if ctx.strict && mem(ctx.keys, key) == false {
+          { out: key }
+        } else {
+          { state: { p: p + 1, z: 0 } }
+        }
+      }
+    }
+  }
+  if bad != null {
+    { out: ctx.unk(str.repeat("-", j) + bad) }
+  } else {
+    out2 := while { p: 0, acc: out } {
+      (p, acc) ~> if p >= na { { out: acc } } else {
+        do {
+          key := at(al, p)
+          v := if p + 1 < na { true } else { fv.val }
+          { state: { p: p + 1, acc: to_val(acc, key, v, ctx) } }
+        }
+      }
+    }
+    { state: { xs: fv.xs, i: fv.i2, n: n, out: out2 } }
+  }
+}
+
+pstep :: (arg, t, i, n, out, ctx) ~> if typeof.is(arg, typeof.str()) {
+  if arg == "--" {
+    { out: finalize(aset(out, "_", cat(aget(out, "_"), t)), ctx) }
+  } else {
+    do {
+      j := dash_count(arg)
+      if j == 0 {
+        { state: { xs: t, i: i + 1, n: n, out: push_pos(out, arg) } }
+      } else {
+        if str.slice(arg, j, j + 3) == "no-" {
+          negstep(arg, j, t, i, n, out, ctx)
+        } else {
+          flagstep(arg, t, i, n, out, ctx, j)
+        }
+      }
+    }
+  }
+} else {
+  -- non-string argv elements are positionals (mri throws on null;
+  -- numbers/bools land here in JS too via `arg.length === undefined`)
+  { state: { xs: t, i: i + 1, n: n, out: push_pos(out, arg) } }
+}
+
+-- ---------------------------------------------------------------------
+-- entry point
+-- ---------------------------------------------------------------------
+
+export parse := (args, opts) ~> do {
+  a0 := if args == null { [] } else { args }
+  ctx := prep_opts(if opts == null { {} } else { opts })
+  n := alen(a0)
+  while { xs: a0, i: 0, n: n, out: [["_", []]] } {
+    (xs, i, n, out) ~> match xs {
+      []: { out: finalize(out, ctx) },
+      [arg, ...t]: pstep(arg, t, i, n, out, ctx)
+    }
+  }
+}

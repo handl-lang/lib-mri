@@ -1,0 +1,29 @@
+--- mri.unknown.test -- strict-mode (`opts.unknown`) coverage.
+---
+--- Kept in the arrow dialect apart from `index.test.hnl` because the
+--- `unknown` callback needs `~>` lambdas; the canonical gate skips
+--- dialect files, so the bulk suite stays gated.
+
+from "./index" import * as m
+
+-- ---------------------------------------------------------------------
+-- opts.unknown (strict mode)
+-- ---------------------------------------------------------------------
+
+test_unknown_flag := assert m.parse(["--x"], { unknown: (a) ~> "BAD:" + a }) = "BAD:--x"
+
+test_unknown_short := assert m.parse(["-x"], { unknown: (a) ~> "BAD:" + a }) = "BAD:-x"
+
+test_unknown_grouped := assert m.parse(["-ab"], { unknown: (a) ~> "BAD:" + a, alias: {} }) = "BAD:-a"
+
+test_unknown_positional_ok := assert m.parse(["pos", "--ok"], { unknown: (a) ~> "BAD:" + a, alias: { okay: "ok" } }) = { "_": ["pos"], ok: true, okay: true }
+
+-- strict whitelist = `Object.keys(opts.alias)` only: `string`/`boolean`
+-- names alone do NOT admit a flag (mri quirk).
+test_strict_string_not_whitelisted := assert m.parse(["--s"], { unknown: (a) ~> "BAD:" + a, string: ["s"] }) = "BAD:--s"
+
+test_unknown_negation := assert m.parse(["--no-x"], { unknown: (a) ~> "BAD:" + a }) = "BAD:--no-x"
+
+test_strict_allows_aliased := assert m.parse(["--watch"], { unknown: (a) ~> "BAD:" + a, alias: { w: "watch" } }) = { "_": [], w: true, watch: true }
+
+test_strict_allows_default_key := assert m.parse([], { unknown: (a) ~> "BAD:" + a, default: { port: 1 } }) = { "_": [], port: 1 }

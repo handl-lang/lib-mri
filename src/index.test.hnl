@@ -1,0 +1,327 @@
+--- mri.test -- coverage for the mri-style argv parser (`src/index.hnl`).
+---
+--- Every case mirrors lukeed/mri `src/index.js` semantics; expected
+--- records are the literal `{ "_": [...], <flag>: <value> }` shape mri
+--- produces. Numeric-looking values coerce to numbers unless the key
+--- is declared `string`/`boolean` (or promoted by a typed `default`).
+
+from "./index" import * as m
+
+-- ---------------------------------------------------------------------
+-- empty / positional-only input
+-- ---------------------------------------------------------------------
+
+test_empty_argv := assert m.parse([], {}) = { "_": [] }
+
+test_null_opts := assert m.parse(["a"], null) = { "_": ["a"] }
+
+test_null_args := assert m.parse(null, {}) = { "_": [] }
+
+test_positionals := assert m.parse(["a", "b", "c"], {}) = { "_": ["a", "b", "c"] }
+
+test_positionals_keep_strings := assert m.parse(["1", "2.5"], {}) = { "_": ["1", "2.5"] }
+
+-- ---------------------------------------------------------------------
+-- `--` end-of-flags
+-- ---------------------------------------------------------------------
+
+test_dd_only := assert m.parse(["--"], {}) = { "_": [] }
+
+test_dd_swallows_flags := assert m.parse(["--", "--x", "-y"], {}) = { "_": ["--x", "-y"] }
+
+test_dd_mid := assert m.parse(["a", "--", "--x", "b"], {}) = { "_": ["a", "--x", "b"] }
+
+test_dd_after_flag := assert m.parse(["--v", "--", "x"], {}) = { "_": ["x"], v: true }
+
+-- ---------------------------------------------------------------------
+-- lone `-` is consumed and produces nothing (mri: j=1, name="",
+-- arr="" -> zero iterations)
+-- ---------------------------------------------------------------------
+
+test_lone_dash := assert m.parse(["-"], {}) = { "_": [] }
+
+-- mri quirk: `-` still runs the value fallback, so it *consumes* the
+-- next arg even though the empty name group stores nothing.
+test_lone_dash_swallows_next := assert m.parse(["-", "a"], {}) = { "_": [] }
+
+test_lone_dash_two_args := assert m.parse(["-", "a", "b"], {}) = { "_": ["b"] }
+
+-- ---------------------------------------------------------------------
+-- long flags
+-- ---------------------------------------------------------------------
+
+test_long_flag := assert m.parse(["--verbose"], {}) = { "_": [], verbose: true }
+
+test_long_flag_last := assert m.parse(["x", "--flag"], {}) = { "_": ["x"], flag: true }
+
+test_long_eq := assert m.parse(["--name=luis"], {}) = { "_": [], name: "luis" }
+
+test_long_space := assert m.parse(["--name", "luis"], {}) = { "_": [], name: "luis" }
+
+test_long_space_last_is_true := assert m.parse(["--name"], {}) = { "_": [], name: true }
+
+test_next_dash_means_true := assert m.parse(["--k", "-x"], {}) = { "_": [], k: true, x: true }
+
+test_empty_eq_last := assert m.parse(["--k="], {}) = { "_": [], k: true }
+
+test_empty_eq_consumes_next := assert m.parse(["--k=", "v"], {}) = { "_": [], k: "v" }
+
+test_empty_eq_next_dash := assert m.parse(["--k=", "-v"], {}) = { "_": [], k: true, v: true }
+
+test_double_eq := assert m.parse(["--k==v"], {}) = { "_": [], k: "=v" }
+
+-- ---------------------------------------------------------------------
+-- numeric coercion (mri's `x = +val; x * 0 === 0 ? x : val`)
+-- ---------------------------------------------------------------------
+
+test_num_int := assert m.parse(["--n=42"], {}) = { "_": [], n: 42 }
+
+test_num_space := assert m.parse(["--n", "42"], {}) = { "_": [], n: 42 }
+
+test_num_float := assert m.parse(["--n=3.14"], {}) = { "_": [], n: 3.14 }
+
+test_num_neg := assert m.parse(["--n=-2"], {}) = { "_": [], n: (0 - 2) }
+
+test_num_leading_dot := assert m.parse(["--n=.5"], {}) = { "_": [], n: 0.5 }
+
+test_num_trailing_dot := assert m.parse(["--n=5."], {}) = { "_": [], n: 5 }
+
+test_num_exp := assert m.parse(["--n=1e3"], {}) = { "_": [], n: 1000 }
+
+test_num_exp_neg := assert m.parse(["--n=1e-3"], {}) = { "_": [], n: 0.001 }
+
+test_num_hex := assert m.parse(["--n=0x10"], {}) = { "_": [], n: 16 }
+
+test_num_hex_upper := assert m.parse(["--n=0XFF"], {}) = { "_": [], n: 255 }
+
+test_num_bin := assert m.parse(["--n=0b101"], {}) = { "_": [], n: 5 }
+
+test_num_oct := assert m.parse(["--n=0o17"], {}) = { "_": [], n: 15 }
+
+test_num_plus := assert m.parse(["--n=+7"], {}) = { "_": [], n: 7 }
+
+test_num_trim := assert m.parse(["--n= 12 "], {}) = { "_": [], n: 12 }
+
+test_num_empty_str := assert m.parse(["--n", ""], {}) = { "_": [], n: 0 }
+
+test_num_space_only := assert m.parse(["--n= "], {}) = { "_": [], n: 0 }
+
+test_num_infinity_stays_str := assert m.parse(["--n=Infinity"], {}) = { "_": [], n: "Infinity" }
+
+test_num_overflow_stays_str := assert m.parse(["--n=1e999"], {}) = { "_": [], n: "1e999" }
+
+test_num_underflow_is_zero := assert m.parse(["--n=1e-999"], {}) = { "_": [], n: 0 }
+
+test_num_huge_int_stays_str := assert m.parse(["--n=100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"], {}) = { "_": [], n: "100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" }
+
+test_num_nan_stays_str := assert m.parse(["--n=NaN"], {}) = { "_": [], n: "NaN" }
+
+test_num_underscore := assert m.parse(["--n=1_000"], {}) = { "_": [], n: "1_000" }
+
+test_num_alpha := assert m.parse(["--n=abc"], {}) = { "_": [], n: "abc" }
+
+test_num_mixed := assert m.parse(["--n=12abc"], {}) = { "_": [], n: "12abc" }
+
+test_num_double_dot := assert m.parse(["--n=1.2.3"], {}) = { "_": [], n: "1.2.3" }
+
+test_num_bad_exp := assert m.parse(["--n=1e"], {}) = { "_": [], n: "1e" }
+
+test_num_dot_only := assert m.parse(["--n=."], {}) = { "_": [], n: "." }
+
+test_num_hex_bad := assert m.parse(["--n=0x"], {}) = { "_": [], n: "0x" }
+
+test_num_oct_bad := assert m.parse(["--n=0o18"], {}) = { "_": [], n: "0o18" }
+
+test_num_trailing_garbage := assert m.parse(["--n=5x"], {}) = { "_": [], n: "5x" }
+
+test_num_dot_exp := assert m.parse(["--n=5.e3"], {}) = { "_": [], n: 5000 }
+
+test_num_dot_exp_nodigits := assert m.parse(["--n=.e3"], {}) = { "_": [], n: ".e3" }
+
+test_num_exp_upper := assert m.parse(["--n=1E5"], {}) = { "_": [], n: 100000 }
+
+test_num_exp_plus := assert m.parse(["--n=1e+5"], {}) = { "_": [], n: 100000 }
+
+test_num_neg_zero := assert m.parse(["--n=-0"], {}) = { "_": [], n: 0 }
+
+test_num_leading_zeros := assert m.parse(["--n=00"], {}) = { "_": [], n: 0 }
+
+test_num_trailing_dot_zero := assert m.parse(["--n=0."], {}) = { "_": [], n: 0 }
+
+test_num_sign_only := assert m.parse(["--n=-"], {}) = { "_": [], n: "-" }
+
+test_num_bin_bad_digit := assert m.parse(["--n=0b2"], {}) = { "_": [], n: "0b2" }
+
+test_num_hex_bad_digit := assert m.parse(["--n=0x1g"], {}) = { "_": [], n: "0x1g" }
+
+test_num_tab_trim := assert m.parse(["--n", "\t42\n"], {}) = { "_": [], n: 42 }
+
+test_num_f64_rounding := assert m.parse(["--n=9007199254740993"], {}) = { "_": [], n: 9007199254740992 }
+
+-- ---------------------------------------------------------------------
+-- short flags
+-- ---------------------------------------------------------------------
+
+test_short_flag := assert m.parse(["-v"], {}) = { "_": [], v: true }
+
+test_short_kv := assert m.parse(["-k", "val"], {}) = { "_": [], k: "val" }
+
+test_short_eq := assert m.parse(["-n=5"], {}) = { "_": [], n: 5 }
+
+test_grouped := assert m.parse(["-abc"], {}) = { "_": [], a: true, b: true, c: true }
+
+test_grouped_value := assert m.parse(["-abc", "val"], {}) = { "_": [], a: true, b: true, c: "val" }
+
+test_grouped_eq := assert m.parse(["-abc=val"], {}) = { "_": [], a: true, b: true, c: "val" }
+
+test_grouped_eq_num := assert m.parse(["-ab=7"], {}) = { "_": [], a: true, b: 7 }
+
+test_grouped_digits := assert m.parse(["-x1y"], {}) = { "_": [], x: true, "1": true, y: true }
+
+test_short_next_dash := assert m.parse(["-k", "-v"], {}) = { "_": [], k: true, v: true }
+
+-- `-n -5`: the next arg starts with `-`, so `n` is `true` and `-5`
+-- parses as the grouped flag `5`.
+test_dash_number_value := assert m.parse(["--n", "-5"], {}) = { "_": [], n: true, "5": true }
+
+test_triple_dash_chars := assert m.parse(["---ab"], {}) = { "_": [], a: true, b: true }
+
+test_eq_before_j := assert m.parse(["-=v"], {}) = { "_": [], "=": true, v: true }
+
+-- ---------------------------------------------------------------------
+-- `--no-` negation (plain assignment `out[name] = false`)
+-- ---------------------------------------------------------------------
+
+test_neg := assert m.parse(["--no-cache"], {}) = { "_": [], cache: false }
+
+test_neg_overwrites := assert m.parse(["--cache", "--no-cache"], {}) = { "_": [], cache: false }
+
+-- negation is a plain assignment, but a *later* flag still merges
+-- through `toVal` (`old == null ? nxt : [old, nxt]`).
+test_neg_then_flag := assert m.parse(["--no-cache", "--cache"], {}) = { "_": [], cache: [false, true] }
+
+test_neg_keeps_eq_in_name := assert m.parse(["--no-x=1"], {}) = { "_": [], "x=1": false }
+
+test_neg_short := assert m.parse(["-abc", "--no-b"], {}) = { "_": [], a: true, b: false, c: true }
+
+test_neg_numeric_name := assert m.parse(["--no-5"], {}) = { "_": [], "5": false }
+
+-- ---------------------------------------------------------------------
+-- repeated flags accumulate into arrays
+-- ---------------------------------------------------------------------
+
+test_repeat_space := assert m.parse(["--t", "a", "--t", "b"], {}) = { "_": [], t: ["a", "b"] }
+
+test_repeat_eq := assert m.parse(["--t=1", "--t=2"], {}) = { "_": [], t: [1, 2] }
+
+test_repeat_mixed := assert m.parse(["--t", "a", "--t"], {}) = { "_": [], t: ["a", true] }
+
+test_repeat_three := assert m.parse(["--x", "1", "--x", "s", "--x=2.5"], {}) = { "_": [], x: [1, "s", 2.5] }
+
+test_repeat_after_neg := assert m.parse(["--no-x", "--x", "v"], {}) = { "_": [], x: [false, "v"] }
+
+-- ---------------------------------------------------------------------
+-- opts.string
+-- ---------------------------------------------------------------------
+
+test_string_opt := assert m.parse(["--name", "42"], { string: ["name"] }) = { "_": [], name: "42" }
+
+test_string_opt_eq := assert m.parse(["--name=42"], { string: "name" }) = { "_": [], name: "42" }
+
+test_string_opt_bare := assert m.parse(["--name"], { string: ["name"] }) = { "_": [], name: "" }
+
+test_string_opt_keeps_space := assert m.parse(["--name= 12 "], { string: ["name"] }) = { "_": [], name: " 12 " }
+
+test_string_opt_num_str := assert m.parse(["--s=0x10"], { string: ["s"] }) = { "_": [], s: "0x10" }
+
+-- ---------------------------------------------------------------------
+-- opts.boolean (incl. the `out._` push quirk)
+-- ---------------------------------------------------------------------
+
+test_bool_opt := assert m.parse(["--force"], { boolean: ["force"] }) = { "_": [], force: true }
+
+test_bool_opt_false := assert m.parse(["--force=false"], { boolean: ["force"] }) = { "_": [], force: false }
+
+test_bool_opt_space_false := assert m.parse(["--force", "false"], { boolean: ["force"] }) = { "_": [], force: false }
+
+test_bool_opt_space_true := assert m.parse(["--force", "true"], { boolean: ["force"] }) = { "_": [], force: true }
+
+test_bool_opt_pushes_pos := assert m.parse(["--force", "0"], { boolean: ["force"] }) = { "_": [0], force: true }
+
+test_bool_opt_pushes_str := assert m.parse(["--force=abc"], { boolean: ["force"] }) = { "_": ["abc"], force: true }
+
+test_bool_opt_next_flag := assert m.parse(["--force", "--other"], { boolean: ["force"] }) = { "_": [], force: true, other: true }
+
+test_bool_opt_eq_num := assert m.parse(["--b=5"], { boolean: ["b"] }) = { "_": [5], b: true }
+
+-- ---------------------------------------------------------------------
+-- opts.default (incl. string/boolean promotion of defaults)
+-- ---------------------------------------------------------------------
+
+test_default_applied := assert m.parse([], { default: { port: 8080 } }) = { "_": [], port: 8080 }
+
+test_default_not_overridden := assert m.parse(["--port", "1"], { default: { port: 8080 } }) = { "_": [], port: 1 }
+
+test_default_string_promotes := assert m.parse(["--name", "42"], { default: { name: "anon" } }) = { "_": [], name: "42" }
+
+test_default_string_value := assert m.parse([], { default: { name: "anon" } }) = { "_": [], name: "anon" }
+
+test_default_bool_promotes := assert m.parse(["--verbose", "0"], { default: { verbose: false } }) = { "_": [0], verbose: true }
+
+test_default_bool_value := assert m.parse([], { default: { verbose: false } }) = { "_": [], verbose: false }
+
+test_default_num_no_promote := assert m.parse(["--n", "42"], { default: { n: 0 } }) = { "_": [], n: 42 }
+
+-- default + alias: the flag lands on the alias, the default lands on
+-- the canonical key, and alias expansion reconciles them (mri order:
+-- defaults first, then `for k in out` alias copy).
+test_default_alias_reconcile := assert m.parse(["--p", "90"], { alias: { port: "p" }, default: { port: 80 } }) = { "_": [], p: 90, port: 90 }
+
+-- ---------------------------------------------------------------------
+-- opts.alias (bidirectional expansion)
+-- ---------------------------------------------------------------------
+
+test_alias_short := assert m.parse(["-w"], { alias: { w: "watch" } }) = { "_": [], w: true, watch: true }
+
+test_alias_long := assert m.parse(["--watch"], { alias: { w: "watch" } }) = { "_": [], w: true, watch: true }
+
+test_alias_list := assert m.parse(["--foo"], { alias: { f: ["foo", "bar"] } }) = { "_": [], f: true, foo: true, bar: true }
+
+test_alias_string := assert m.parse(["--n", "42"], { alias: { n: "name" }, string: ["name"] }) = { "_": [], n: "42", name: "42" }
+
+test_alias_value := assert m.parse(["--w", "yes"], { alias: { w: "watch" } }) = { "_": [], w: "yes", watch: "yes" }
+
+test_alias_negation := assert m.parse(["--no-watch"], { alias: { w: "watch" } }) = { "_": [], w: false, watch: false }
+
+-- ---------------------------------------------------------------------
+-- mixed / kitchen-sink
+-- ---------------------------------------------------------------------
+
+test_kitchen_sink := assert m.parse(
+  ["run", "--port=8080", "-v", "--name", "app", "--", "--tail"],
+  { alias: { v: "verbose" }, default: { port: 80 } }
+) = { "_": ["run", "--tail"], port: 8080, v: true, verbose: true, name: "app" }
+
+test_unicode_args := assert m.parse(["--name=josé", "café"], {}) = { "_": ["café"], name: "josé" }
+
+-- ---------------------------------------------------------------------
+-- alias fixpoint / expansion-order regressions (verified against mri)
+-- ---------------------------------------------------------------------
+
+-- mri's `for k in opts.alias` reads `opts.alias[k]` *live*: processing
+-- `a -> [b]` overwrites the not-yet-visited `b -> [c]` entry, so `c`
+-- never becomes an alias at all.
+test_alias_live_read := assert m.parse(["--a"], { alias: { a: ["b"], b: ["c"] } }) = { "_": [], a: true, b: true }
+
+-- defaults promote `tag` into the boolean list *and* its alias targets;
+-- `-y` then propagates `true` through the fixpoint aliases.
+test_alias_default_bool_chain := assert m.parse(["-y"], { alias: { z: ["y", "tag"] }, default: { tag: false } }) = { "_": [], y: true, tag: true, z: true }
+
+-- ...and with no flags at all the default's `false` propagates outward.
+test_alias_default_propagates := assert m.parse([], { alias: { z: ["y", "tag"] }, default: { tag: false } }) = { "_": [], tag: false, y: false, z: false }
+
+-- `for k in out` iterates insertion order: `b` (set first) copies its
+-- value onto `a` before `a`'s own expansion runs.
+test_alias_expansion_order := assert m.parse(["--b", "2", "--a", "1"], { alias: { a: ["b"] } }) = { "_": [], b: 2, a: 2 }
+
+test_alias_shared_target_last_wins := assert m.parse(["--a", "--d", "5"], { alias: { a: ["b"], d: ["b"] } }) = { "_": [], a: true, d: 5, b: 5 }
