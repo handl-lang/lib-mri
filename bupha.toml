@@ -6,7 +6,7 @@
 
 [[repos]]
 name = "handl-lang/lib-mri"
-dir = "/home/luis/GitHub/handl-lang/lib-mri"
+dir = "~//GitHub/handl-lang/lib-mri"
 branch = "refs/heads/main"
   [repos.runner]
   kind = "script"
