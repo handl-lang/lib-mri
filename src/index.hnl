@@ -61,44 +61,44 @@ from "typeof" import * as typeof
 -- list / record helpers
 -- ---------------------------------------------------------------------
 
-alen :: (xs) ~> while { xs: xs, n: 0 } {
+alen := (xs) ~> while { xs: xs, n: 0 } {
   (xs, n) ~> match xs {
     []: { out: n },
     [_h, ...t]: { state: { xs: t, n: n + 1 } }
   }
 }
 
-rev :: (xs) ~> while { xs: xs, acc: [] } {
+rev := (xs) ~> while { xs: xs, acc: [] } {
   (xs, acc) ~> match xs {
     []: { out: acc },
     [h, ...t]: { state: { xs: t, acc: [h, ...acc] } }
   }
 }
 
-cat :: (xs, ys) ~> [...xs, ...ys]
+cat := (xs, ys) ~> [...xs, ...ys]
 
-mem :: (xs, x) ~> while { xs: xs, found: false } {
+mem := (xs, x) ~> while { xs: xs, found: false } {
   (xs, found) ~> match xs {
     []: { out: found },
     [h, ...t]: { state: { xs: t, found: if h == x { true } else { found } } }
   }
 }
 
-at :: (xs, i) ~> while { xs: xs, i: i } {
+at := (xs, i) ~> while { xs: xs, i: i } {
   (xs, i) ~> match xs {
     []: { out: null },
     [h, ...t]: if i <= 0 { { out: h } } else { { state: { xs: t, i: i - 1 } } }
   }
 }
 
-take :: (xs, n) ~> while { xs: xs, n: n, acc: [] } {
+take := (xs, n) ~> while { xs: xs, n: n, acc: [] } {
   (xs, n, acc) ~> match xs {
     []: { out: rev(acc) },
     [h, ...t]: if n <= 0 { { out: rev(acc) } } else { { state: { xs: t, n: n - 1, acc: [h, ...acc] } } }
   }
 }
 
-drop :: (xs, n) ~> while { xs: xs, n: n } {
+drop := (xs, n) ~> while { xs: xs, n: n } {
   (xs, n) ~> match xs {
     []: { out: [] },
     [h, ...t]: if n <= 0 { { out: xs } } else { { state: { xs: t, n: n - 1 } } }
@@ -108,30 +108,30 @@ drop :: (xs, n) ~> while { xs: xs, n: n } {
 -- assoc-list (JS-object-shaped) helpers: entries are `[key, value]`
 -- pairs in insertion order, like `obj.entries` produces.
 
-ahask :: (tbl, k) ~> while { xs: tbl, found: false } {
+ahask := (tbl, k) ~> while { xs: tbl, found: false } {
   (xs, found) ~> match xs {
     []: { out: found },
     [e, ...t]: { state: { xs: t, found: if e[0] == k { true } else { found } } }
   }
 }
 
-aget :: (tbl, k) ~> while { xs: tbl, out: null } {
+aget := (tbl, k) ~> while { xs: tbl, out: null } {
   (xs, out) ~> match xs {
     []: { out: out },
     [e, ...t]: if e[0] == k { { out: e[1] } } else { { state: { xs: t, out: out } } }
   }
 }
 
-areplace :: (tbl, k, v) ~> while { xs: tbl, acc: [] } {
+areplace := (tbl, k, v) ~> while { xs: tbl, acc: [] } {
   (xs, acc) ~> match xs {
     []: { out: acc },
     [e, ...t]: if e[0] == k { { state: { xs: t, acc: [...acc, [k, v]] } } } else { { state: { xs: t, acc: [...acc, e] } } }
   }
 }
 
-aset :: (tbl, k, v) ~> if ahask(tbl, k) { areplace(tbl, k, v) } else { [...tbl, [k, v]] }
+aset := (tbl, k, v) ~> if ahask(tbl, k) { areplace(tbl, k, v) } else { [...tbl, [k, v]] }
 
-tbl_keys :: (tbl) ~> while { xs: tbl, acc: [] } {
+tbl_keys := (tbl) ~> while { xs: tbl, acc: [] } {
   (xs, acc) ~> match xs {
     []: { out: acc },
     [e, ...t]: { state: { xs: t, acc: [...acc, e[0]] } }
@@ -141,26 +141,26 @@ tbl_keys :: (tbl) ~> while { xs: tbl, acc: [] } {
 -- record helpers (dynamic-key access goes through `obj.*` because a
 -- missing-key index raises)
 
-rget :: (r, k) ~> if typeof.is(r, typeof.obj()) {
+rget := (r, k) ~> if typeof.is(r, typeof.obj()) {
   if mem(obj.keys(r), k) { r[k] } else { null }
 } else { null }
 
-rentries :: (r) ~> if typeof.is(r, typeof.obj()) { obj.entries(r) } else { [] }
+rentries := (r) ~> if typeof.is(r, typeof.obj()) { obj.entries(r) } else { [] }
 
 -- mri's `toArr`: null -> [], array -> itself, anything else -> [x]
-to_arr :: (v) ~> if v == null {
+to_arr := (v) ~> if v == null {
   []
 } else {
   if typeof.is(v, typeof.arr()) { v } else { [v] }
 }
 
-chars_of :: (s) ~> while { i: 0, n: str.length(s), acc: [] } {
+chars_of := (s) ~> while { i: 0, n: str.length(s), acc: [] } {
   (i, n, acc) ~> if i >= n { { out: acc } } else {
     { state: { i: i + 1, n: n, acc: [...acc, str.char_at(s, i)] } }
   }
 }
 
-dash_count :: (s) ~> while { i: 0, n: str.length(s) } {
+dash_count := (s) ~> while { i: 0, n: str.length(s) } {
   (i, n) ~> if i >= n { { out: i } } else {
     if str.char_at(s, i) == "-" { { state: { i: i + 1, n: n } } } else { { out: i } }
   }
@@ -170,16 +170,16 @@ dash_count :: (s) ~> while { i: 0, n: str.length(s) } {
 -- JS `+val` numeric coercion
 -- ---------------------------------------------------------------------
 
-is_dig :: (s, i) ~> str.find("0123456789", str.char_at(s, i)) >= 0
+is_dig := (s, i) ~> str.find("0123456789", str.char_at(s, i)) >= 0
 
-scan_dig :: (s, i) ~> while { i: i, n: str.length(s) } {
+scan_dig := (s, i) ~> while { i: i, n: str.length(s) } {
   (i, n) ~> if i >= n { { out: i } } else {
     if is_dig(s, i) { { state: { i: i + 1, n: n } } } else { { out: i } }
   }
 }
 
 -- fold `ds` (a nonempty digit string) in base `base` over alphabet `alpha`
-fold_base :: (ds, base, alpha) ~> do {
+fold_base := (ds, base, alpha) ~> do {
   l := str.length(ds)
   if str.is_empty(ds) {
     { ok: false, v: 0 }
@@ -201,7 +201,7 @@ fold_base :: (ds, base, alpha) ~> do {
 
 -- scan an exponent `e[+-]?digits+` starting at index `i` (which points
 -- at the `e`/`E`); returns {ok, v: source slice, end}
-exp_scan :: (s, i) ~> do {
+exp_scan := (s, i) ~> do {
   l := str.length(s)
   k := i + 1
   has_sign := k < l && (str.char_at(s, k) == "+" || str.char_at(s, k) == "-")
@@ -214,7 +214,7 @@ exp_scan :: (s, i) ~> do {
   }
 }
 
-has_nonzero :: (s) ~> while { i: 0, n: str.length(s) } {
+has_nonzero := (s) ~> while { i: 0, n: str.length(s) } {
   (i, n) ~> if i >= n { { out: false } } else {
     if str.find("123456789", str.char_at(s, i)) >= 0 {
       { out: true }
@@ -230,7 +230,7 @@ has_nonzero :: (s) ~> while { i: 0, n: str.length(s) } {
 -- with a non-negative exponent means overflow -> decline and let
 -- `js_num` return the original string. Underflow (`e-…`) stays 0, as
 -- does every exactly-zero mantissa.
-dec_build :: (s, i0, frac, expstr) ~> do {
+dec_build := (s, i0, frac, expstr) ~> do {
   ip := if i0 == 0 { "0" } else { str.slice(s, 0, i0) }
   fp := if str.is_empty(frac) { "" } else { "." + frac }
   mant := ip + fp
@@ -244,7 +244,7 @@ dec_build :: (s, i0, frac, expstr) ~> do {
 }
 
 -- decimal: `digits[.digits][eE[+-]digits]` or `.digits[...]`
-dec_val :: (s) ~> do {
+dec_val := (s) ~> do {
   l := str.length(s)
   i0 := scan_dig(s, 0)
   i1 := i0
@@ -274,7 +274,7 @@ dec_val :: (s) ~> do {
   }
 }
 
-base_val :: (s) ~> if str.is_empty(s) {
+base_val := (s) ~> if str.is_empty(s) {
   { ok: false, v: 0 }
 } else {
   if str.starts_with(s, "0x") || str.starts_with(s, "0X") {
@@ -292,7 +292,7 @@ base_val :: (s) ~> if str.is_empty(s) {
   }
 }
 
-num_scan :: (t) ~> do {
+num_scan := (t) ~> do {
   r0 := if str.starts_with(t, "-") {
     { neg: true, body: str.slice(t, 1, str.length(t)) }
   } else {
@@ -312,7 +312,7 @@ num_scan :: (t) ~> do {
 
 -- JS `+s`: whitespace-only/empty -> 0, numeric grammar -> number,
 -- anything else -> the original string
-js_num :: (s) ~> do {
+js_num := (s) ~> do {
   t := str.trim(s)
   if str.is_empty(t) {
     0
@@ -322,7 +322,7 @@ js_num :: (s) ~> do {
   }
 }
 
-coerce :: (v) ~> if typeof.is(v, typeof.num()) {
+coerce := (v) ~> if typeof.is(v, typeof.num()) {
   v
 } else {
   if typeof.is(v, typeof.str()) {
@@ -333,7 +333,7 @@ coerce :: (v) ~> if typeof.is(v, typeof.num()) {
 }
 
 -- JS `!!v` truthiness (differs from `typeof.to_bool` on []/{})
-js_truthy :: (v) ~> if v == null {
+js_truthy := (v) ~> if v == null {
   false
 } else {
   if typeof.is(v, typeof.bool()) { v } else {
@@ -348,9 +348,9 @@ js_truthy :: (v) ~> if v == null {
 -- expansion's overwrite order is observable, while handl records iterate
 -- keys sorted.  Converted back to a record only in `finalize`.
 
-push_pos :: (out, v) ~> aset(out, "_", cat(aget(out, "_"), [v]))
+push_pos := (out, v) ~> aset(out, "_", cat(aget(out, "_"), [v]))
 
-tbl_to_rec :: (tbl) ~> while { xs: tbl, acc: {} } {
+tbl_to_rec := (tbl) ~> while { xs: tbl, acc: {} } {
   (xs, acc) ~> match xs {
     []: { out: acc },
     [e, ...t]: { state: { xs: t, acc: obj.set(acc, e[0], e[1]) } }
@@ -359,7 +359,7 @@ tbl_to_rec :: (tbl) ~> while { xs: tbl, acc: {} } {
 
 -- mri's `toVal` value computation; may push onto `out._` for boolean
 -- options, so it returns {out, v}.
-val_for :: (out, key, val, ctx) ~> if mem(ctx.strs, key) {
+val_for := (out, key, val, ctx) ~> if mem(ctx.strs, key) {
   { out: out, v: if (val == null || val == true) { "" } else { typeof.to_string(val) } }
 } else {
   if typeof.is(val, typeof.bool()) {
@@ -383,7 +383,7 @@ val_for :: (out, key, val, ctx) ~> if mem(ctx.strs, key) {
 
 -- mri's `toVal` merge: `old == null ? nxt : Array.isArray(old) ?
 -- old.concat(nxt) : [old, nxt]`
-to_val :: (out, key, val, ctx) ~> do {
+to_val := (out, key, val, ctx) ~> do {
   old := aget(out, key)
   r := val_for(out, key, val, ctx)
   merged := if old == null {
@@ -407,7 +407,7 @@ to_val :: (out, key, val, ctx) ~> do {
 -- keys in order, but reads `opts.alias[k]` live -- earlier inner writes
 -- (`opts.alias[tgt] = ...`) can overwrite a not-yet-visited entry's
 -- source list.  Targets are stored under their JS-stringified key.
-alias_expand :: (alias_in) ~> while { xs: alias_in, acc: [] } {
+alias_expand := (alias_in) ~> while { xs: alias_in, acc: [] } {
   (xs, acc) ~> match xs {
     []: { out: acc },
     [e, ...t]: do {
@@ -432,7 +432,7 @@ alias_expand :: (alias_in) ~> while { xs: alias_in, acc: [] } {
 
 -- one level of alias lookup per original name (mri pushes
 -- `opts.alias[name]` entries onto the string/boolean lists)
-expand_names :: (names, tbl) ~> cat(names, while { xs: names, acc: [] } {
+expand_names := (names, tbl) ~> cat(names, while { xs: names, acc: [] } {
   (xs, acc) ~> match xs {
     []: { out: acc },
     [nm, ...t]: do {
@@ -442,7 +442,7 @@ expand_names :: (names, tbl) ~> cat(names, while { xs: names, acc: [] } {
   }
 })
 
-prep_opts :: (o) ~> do {
+prep_opts := (o) ~> do {
   alias0 := alias_expand(rentries(rget(o, "alias")))
   str1 := expand_names(to_arr(rget(o, "string")), alias0)
   bool1 := expand_names(to_arr(rget(o, "boolean")), alias0)
@@ -484,7 +484,7 @@ prep_opts :: (o) ~> do {
 -- assoc lists give us exactly that; keys added during expansion are
 -- appended to `acc` and never revisited, matching V8's enum cache).
 -- `out[k]` is re-read live for every target write.
-finalize :: (outl, ctx) ~> do {
+finalize := (outl, ctx) ~> do {
   o1 := while { xs: ctx.defs, acc: outl } {
     (xs, acc) ~> match xs {
       []: { out: acc },
@@ -515,7 +515,7 @@ finalize :: (outl, ctx) ~> do {
 
 -- mri's negation branch: `out[name] = false` (plain assignment, no
 -- coercion, no merge; aliases are applied by `finalize`)
-negstep :: (arg, j, t, i, n, out, ctx) ~> do {
+negstep := (arg, j, t, i, n, out, ctx) ~> do {
   nm := str.slice(arg, j + 3, str.length(arg))
   if ctx.strict {
     if mem(ctx.keys, nm) {
@@ -530,7 +530,7 @@ negstep :: (arg, j, t, i, n, out, ctx) ~> do {
 
 -- mri's flag branch: `name`/`val` extraction, grouped-short expansion,
 -- per-name strict check, `toVal` per name.
-flagstep :: (arg, t, i, n, out, ctx, j) ~> do {
+flagstep := (arg, t, i, n, out, ctx, j) ~> do {
   l := str.length(arg)
   eq := while { p: j + 1, m: l } {
     (p, m) ~> if p >= m { { out: (0 - 1) } } else {
@@ -591,7 +591,7 @@ flagstep :: (arg, t, i, n, out, ctx, j) ~> do {
   }
 }
 
-pstep :: (arg, t, i, n, out, ctx) ~> if typeof.is(arg, typeof.str()) {
+pstep := (arg, t, i, n, out, ctx) ~> if typeof.is(arg, typeof.str()) {
   if arg == "--" {
     { out: finalize(aset(out, "_", cat(aget(out, "_"), t)), ctx) }
   } else {
